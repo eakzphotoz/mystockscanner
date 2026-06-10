@@ -1,0 +1,6 @@
+Plaintext
+streamlit
+yfinance
+pandas
+google-genai
+pydantic
