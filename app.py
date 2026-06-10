@@ -11,7 +11,11 @@ from google.genai import types
 from pydantic import BaseModel
 
 # 🔑 ตั้งค่า API 
-API_KEY = "AQ.Ab8RN6LieYW6wI0F3XcDI21PY2bSyjxgfyRMfwV9qoGZYm6ubA"
+# ลบบรรทัดเดิมที่ใส่ Key ตรงๆ ทิ้งไป แล้วแทนที่ด้วย 2 บรรทัดนี้:
+import streamlit as st
+
+# ดึง Key มาจากตู้เซฟของ Streamlit
+API_KEY = st.secrets["GEMINI_API_KEY"]
 
 st.set_page_config(page_title="Pro Stock Scanner", layout="wide", page_icon="📈")
 
@@ -105,7 +109,7 @@ def analyze_with_ai(ticker):
         
         client = genai.Client(api_key=API_KEY)
         response = client.models.generate_content(
-            model='gemini-3.5-flash', 
+            model='gemini-3.1-flash-lite', 
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
