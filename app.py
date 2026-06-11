@@ -33,33 +33,16 @@ if 'scan_results' not in st.session_state:
 if 'analysis_result' not in st.session_state:
     st.session_state.analysis_result = None
 
+# ฟังก์ชันตัวช่วยสำหรับเปลี่ยนหุ้นและเคลียร์ข้อมูลเก่า
 def set_active_ticker(ticker_symbol):
     st.session_state.ticker = ticker_symbol.upper()
-    st.session_state.analysis_result = None  
+    st.session_state.analysis_result = None  # ล้างบทวิเคราะห์เก่าเมื่อเปลี่ยนหุ้น
 
-# --- 🚀 ฟังก์ชันดึงรายชื่อหุ้นรายตลาด (Scraper) ---
-@st.cache_data(ttl=3600)  
+# --- 🚀 ฟังก์ชันสแกนหุ้นเทคนิคอล ---
+@st.cache_data(ttl=3600)  # ดึงข้อมูลจาก Wikipedia และจำไว้ 1 ชั่วโมง ไม่ต้องโหลดใหม่ทุกครั้ง
 def get_tickers(market):
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    
-    if market == "NASDAQ 100":
-        url = 'https://en.wikipedia.org/wiki/Nasdaq-100'
-    elif market == "S&P 500":
-        url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
-    elif market == "Dow Jones":
-        url = 'https://en.wikipedia.org/wiki/Dow_Jones_Industrial_Average'
-    elif market == "Penny Stocks":
-        # คัดเลือกหุ้นเล็ก/Micro-cap สภาพคล่องและโวลุ่มสูงในตลาดสหรัฐฯ มาเป็นฐานสแกนสัญญาณ
-        return [
-            'NIO', 'SNDL', 'MULN', 'HOLO', 'SOUN', 'BBAI', 'WISA', 'ZOM', 'CTRM', 
-            'SENS', 'BIOL', 'GNLN', 'PHUN', 'MARK', 'NKLA', 'BITF', 'RIOT', 'MARA', 
-            'HIVE', 'SOS', 'WULF', 'PLUG', 'FCEL', 'RUN', 'LCID', 'RIVN', 'GME', 'AMC'
-        ]
-    else:
-        return ['AAPL', 'MSFT', 'NVDA']
-
     try:
-        req = urllib.request.Request(url, headers=headers)
+        req = urllib.request.Request('https://en.wikipedia.org/wiki/Nasdaq-100', headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req) as response:
             html = response.read()
         tables = pd.read_html(io.StringIO(html.decode('utf-8')))
@@ -68,31 +51,21 @@ def get_tickers(market):
             if 'Symbol' in df.columns: return df['Symbol'].tolist()
     except Exception:
         pass
-    
-    # Fallback เผื่อกรณีวิกิพีเดียล่ม
-    if market == "S&P 500": return ['AAPL', 'MSFT', 'AMZN', 'NVDA', 'GOOGL', 'META', 'LLY', 'V', 'XOM']
-    if market == "Dow Jones": return ['AAPL', 'MSFT', 'AMZN', 'NVDA', 'GS', 'HD', 'MCD', 'CAT', 'JPM']
     return ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA', 'AMD', 'NFLX']
 
-# --- 🔍 ฟังก์ชันสแกนหุ้นรายตัว ---
-def scan_single_stock(ticker, filter_penny=False):
+def scan_single_stock(ticker):
     try:
         raw_df = yf.download(ticker, period="6mo", interval="1d", auto_adjust=False, progress=False)
         if raw_df is None or raw_df.empty: return None
         
+        # จัดการ MultiIndex ของ yfinance ล่าสุด
         if isinstance(raw_df.columns, pd.MultiIndex):
             raw_df.columns = raw_df.columns.get_level_values(0)
             
-        df = raw_df.dropna().copy()
+        df = raw_df.dropna().copy()  # ใช้ .copy() เพื่อเลี่ยง Warning
         if len(df) < 30: return None
         
         close = df['Close']
-        c, pc = float(close.iloc[-1]), float(close.iloc[-2])
-        
-        # ⚠️ เงื่อนไขตรวจสอบ Penny Stocks (ต้องราคาไม่เกิน $5 ตามมาตรฐานสากล)
-        if filter_penny and c > 5.0:
-            return None
-            
         df['MA20'] = close.rolling(window=20).mean()
         df['STD'] = close.rolling(window=20).std()
         df['BB_Upper'] = df['MA20'] + (df['STD'] * 2)
@@ -106,6 +79,7 @@ def scan_single_stock(ticker, filter_penny=False):
         df['Signal_Line'] = df['MACD'].ewm(span=9).mean()
         df['MACD_Hist'] = df['MACD'] - df['Signal_Line']
         
+        c, pc = float(close.iloc[-1]), float(close.iloc[-2])
         u, pu = float(df['BB_Upper'].iloc[-1]), float(df['BB_Upper'].iloc[-2])
         l = float(df['BB_Lower'].iloc[-1])
         v, vm = float(df['Volume'].iloc[-1]), float(df['Vol_MA'].iloc[-1])
@@ -165,7 +139,7 @@ with st.sidebar:
     st.title("👑 Pro Scanner")
     st.markdown("ระบบสแกนหุ้น & AI วิเคราะห์")
     
-    # ค้นหาหุ้นรายตัว
+    # ค้นหาหุ้น
     st.write("🔍 **ค้นหาหุ้นที่ต้องการ**")
     col1, col2 = st.columns([3, 1])
     with col1:
@@ -177,41 +151,31 @@ with st.sidebar:
 
     st.divider()
     
-    # 🌟 ระบบเลือกตลาดเพื่อสแกนหุ้น
-    st.write("🚀 **ระบบสแกนกลุ่มตลาด**")
-    selected_market = st.selectbox(
-        "เลือกกลุ่มหุ้นที่ต้องการสแกน",
-        options=["NASDAQ 100", "S&P 500", "Dow Jones", "Penny Stocks"],
-        index=0
-    )
-    
+    # ระบบสแกนตลาด
+    st.write("🚀 **ระบบสแกนตลาด (NASDAQ 100)**")
     if st.button("เริ่มสแกนหุ้น", type="primary", use_container_width=True):
         st.session_state.scan_results = []
-        tickers = get_tickers(selected_market)
+        tickers = get_tickers("NASDAQ")
         
         progress_bar = st.progress(0)
         status_text = st.empty()
         
         results = []
-        # เปิดโหมดฟิลเตอร์ราคาต่ำกว่า $5 หากเลือก Penny Stocks
-        filter_penny = (selected_market == "Penny Stocks")
-        
-        # เพิ่ม max_workers เป็น 20 เพื่อความเร็วในการทะลวงหุ้นกลุ่มใหญ่ เช่น S&P 500
-        with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
-            futures = {executor.submit(scan_single_stock, t, filter_penny): t for t in tickers}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(scan_single_stock, t): t for t in tickers}
             for i, future in enumerate(concurrent.futures.as_completed(futures)):
                 progress_bar.progress((i + 1) / len(tickers))
-                status_text.text(f"กำลังสแกน {selected_market}... {i+1}/{len(tickers)}")
+                status_text.text(f"กำลังสแกน... {i+1}/{len(tickers)}")
                 res = future.result()
                 if res:
                     results.append(res)
         
         st.session_state.scan_results = results
-        status_text.text(f"✅ สแกนสำเร็จ! พบ {len(results)} ตัวในกลุ่ม {selected_market}")
+        status_text.text(f"✅ สแกนเสร็จสิ้น! พบ {len(results)} ตัว")
         progress_bar.empty()
         st.rerun()
 
-    # แสดงผลหุ้นติดสัญญาณ
+    # แสดงผลสแกนในลักษณะปุ่มกด
     if st.session_state.scan_results:
         st.write("📋 **หุ้นที่เข้าเงื่อนไข:**")
         for item in st.session_state.scan_results:
@@ -273,6 +237,7 @@ with col_ai1:
             st.session_state.analysis_result = analyze_with_ai(st.session_state.ticker)
 
 with col_ai2:
+    # แสดงผลลัพธ์จาก Session State (ผลลัพธ์จะคงอยู่ ไม่หายไปไหนจนกว่าจะเปลี่ยนหุ้น)
     if st.session_state.analysis_result:
         st.info("💡 บทวิเคราะห์ล่าสุด")
         st.markdown(st.session_state.analysis_result)
