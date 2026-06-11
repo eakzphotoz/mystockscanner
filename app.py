@@ -10,16 +10,13 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel
 
-# 🔑 ตั้งค่า API 
-# ลบบรรทัดเดิมที่ใส่ Key ตรงๆ ทิ้งไป แล้วแทนที่ด้วย 2 บรรทัดนี้:
-import streamlit as st
-
-# ดึง Key มาจากตู้เซฟของ Streamlit
-API_KEY = st.secrets["GEMINI_API_KEY"]
-
+# --- ⚙️ การตั้งค่าหน้าจอและ API ---
 st.set_page_config(page_title="Pro Stock Scanner", layout="wide", page_icon="📈")
 
-# --- โครงสร้าง JSON สำหรับ AI ---
+# ดึง Key มาจากตู้เซฟของ Streamlit
+API_KEY = st.secrets.get("GEMINI_API_KEY", "")
+
+# --- 📊 โครงสร้าง JSON สำหรับ AI ---
 class StockAnalysisResult(BaseModel):
     sentiment: str
     risk_level: str
@@ -28,15 +25,21 @@ class StockAnalysisResult(BaseModel):
     action_suggestion: str
     detailed_reason: str
 
-# --- ตัวแปร Session ---
+# --- 🔄 ตัวแปร Session (ระบบความจำของแอป) ---
 if 'ticker' not in st.session_state:
     st.session_state.ticker = "AAPL"
 if 'scan_results' not in st.session_state:
     st.session_state.scan_results = []
-if 'is_scanning' not in st.session_state:
-    st.session_state.is_scanning = False
+if 'analysis_result' not in st.session_state:
+    st.session_state.analysis_result = None
 
-# --- ฟังก์ชันสแกนหุ้น (ดึงมาจากเวอร์ชันเดิมของคุณ) ---
+# ฟังก์ชันตัวช่วยสำหรับเปลี่ยนหุ้นและเคลียร์ข้อมูลเก่า
+def set_active_ticker(ticker_symbol):
+    st.session_state.ticker = ticker_symbol.upper()
+    st.session_state.analysis_result = None  # ล้างบทวิเคราะห์เก่าเมื่อเปลี่ยนหุ้น
+
+# --- 🚀 ฟังก์ชันสแกนหุ้นเทคนิคอล ---
+@st.cache_data(ttl=3600)  # ดึงข้อมูลจาก Wikipedia และจำไว้ 1 ชั่วโมง ไม่ต้องโหลดใหม่ทุกครั้ง
 def get_tickers(market):
     try:
         req = urllib.request.Request('https://en.wikipedia.org/wiki/Nasdaq-100', headers={'User-Agent': 'Mozilla/5.0'})
@@ -46,9 +49,9 @@ def get_tickers(market):
         for df in tables:
             if 'Ticker' in df.columns: return df['Ticker'].tolist()
             if 'Symbol' in df.columns: return df['Symbol'].tolist()
-    except:
+    except Exception:
         pass
-    return ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA', 'AMD', 'NFLX'] # ตัวสำรอง
+    return ['AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'TSLA', 'AMD', 'NFLX']
 
 def scan_single_stock(ticker):
     try:
@@ -59,7 +62,7 @@ def scan_single_stock(ticker):
         if isinstance(raw_df.columns, pd.MultiIndex):
             raw_df.columns = raw_df.columns.get_level_values(0)
             
-        df = raw_df.dropna()
+        df = raw_df.dropna().copy()  # ใช้ .copy() เพื่อเลี่ยง Warning
         if len(df) < 30: return None
         
         close = df['Close']
@@ -70,7 +73,7 @@ def scan_single_stock(ticker):
         df['Vol_MA'] = df['Volume'].rolling(window=20).mean()
         
         delta = close.diff()
-        rs = delta.where(delta>0,0).ewm(alpha=1/14).mean() / -delta.where(delta<0,0).ewm(alpha=1/14).mean()
+        rs = delta.where(delta > 0, 0).ewm(alpha=1/14).mean() / -delta.where(delta < 0, 0).ewm(alpha=1/14).mean()
         df['RSI'] = 100 - (100 / (1 + rs))
         df['MACD'] = close.ewm(span=12).mean() - close.ewm(span=26).mean()
         df['Signal_Line'] = df['MACD'].ewm(span=9).mean()
@@ -92,16 +95,18 @@ def scan_single_stock(ticker):
         
         if signal != "⚪ No Signal":
             return {"Ticker": ticker, "Price": round(c, 2), "Signal": signal}
-    except:
+    except Exception:
         pass
     return None
 
-# --- ฟังก์ชัน AI ---
+# --- 🤖 ฟังก์ชันเชื่อมต่อ Gemini AI ---
 def analyze_with_ai(ticker):
+    if not API_KEY:
+        return "❌ ไม่พบ GEMINI_API_KEY ใน st.secrets"
     try:
         data = yf.Ticker(ticker)
         hist = data.history(period="1mo")
-        if hist.empty: return "❌ ไม่พบข้อมูลราคาหุ้น"
+        if hist.empty: return "❌ ไม่พบข้อมูลราคาหุ้นเพื่อส่งให้ AI"
         current_price = hist['Close'].iloc[-1]
         
         prompt = f"""วิเคราะห์เทคนิคอลหุ้น {ticker} ราคาปัจจุบัน ${current_price:.2f}
@@ -115,14 +120,14 @@ def analyze_with_ai(ticker):
                 response_mime_type="application/json",
                 response_schema=StockAnalysisResult,
                 temperature=0.2,
-                system_instruction="คุณคือผู้ช่วยวิเคราะห์หุ้น ตอบเป็นภาษาไทยที่สุภาพและเข้าใจง่าย"
+                system_instruction="คุณคือผู้ช่วยวิเคราะห์หุ้น ตอบเป็นภาษาไทยที่สุภาพและเข้าใจง่าย กระชับแต่ได้ใจความคมคาย"
             )
         )
         result = json.loads(response.text)
         md_text = f"### 📊 มุมมอง: {result['sentiment']} | ⚠️ ความเสี่ยง: {result['risk_level']}\n"
         md_text += f"**🎯 แนะนำ:** {result['action_suggestion']}\n\n"
         md_text += f"**🛡️ แนวรับ:** {result['support_zone']} | **🚀 แนวต้าน:** {result['resistance_zone']}\n"
-        md_text += "---\n**📝 บทวิเคราะห์:**\n" + result['detailed_reason']
+        md_text += "---\n**📝 บทวิเคราะห์เชิงลึก:**\n" + result['detailed_reason']
         return md_text
     except Exception as e:
         return f"❌ เกิดข้อผิดพลาดกับ AI: {str(e)}"
@@ -138,15 +143,15 @@ with st.sidebar:
     st.write("🔍 **ค้นหาหุ้นที่ต้องการ**")
     col1, col2 = st.columns([3, 1])
     with col1:
-        new_ticker = st.text_input("Ticker", value=st.session_state.ticker, label_visibility="collapsed")
+        search_input = st.text_input("Ticker", value=st.session_state.ticker, label_visibility="collapsed")
     with col2:
         if st.button("ค้นหา", use_container_width=True):
-            st.session_state.ticker = new_ticker.upper()
+            set_active_ticker(search_input)
             st.rerun()
 
     st.divider()
     
-    # ระบบสแกนหุ้น
+    # ระบบสแกนตลาด
     st.write("🚀 **ระบบสแกนตลาด (NASDAQ 100)**")
     if st.button("เริ่มสแกนหุ้น", type="primary", use_container_width=True):
         st.session_state.scan_results = []
@@ -156,7 +161,6 @@ with st.sidebar:
         status_text = st.empty()
         
         results = []
-        # ใช้ ThreadPool เพื่อให้สแกนเร็วขึ้น
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             futures = {executor.submit(scan_single_stock, t): t for t in tickers}
             for i, future in enumerate(concurrent.futures.as_completed(futures)):
@@ -167,25 +171,24 @@ with st.sidebar:
                     results.append(res)
         
         st.session_state.scan_results = results
-        status_text.text(f"✅ สแกนเสร็จสิ้น! พบ {len(results)} ตัวที่เข้าเงื่อนไข")
+        status_text.text(f"✅ สแกนเสร็จสิ้น! พบ {len(results)} ตัว")
         progress_bar.empty()
         st.rerun()
 
-    # แสดงผลสแกน
+    # แสดงผลสแกนในลักษณะปุ่มกด
     if st.session_state.scan_results:
         st.write("📋 **หุ้นที่เข้าเงื่อนไข:**")
         for item in st.session_state.scan_results:
-            # สร้างปุ่มสำหรับหุ้นแต่ละตัวที่สแกนเจอ
             if st.button(f"{item['Signal']} | {item['Ticker']} (${item['Price']})", key=f"scan_{item['Ticker']}", use_container_width=True):
-                st.session_state.ticker = item['Ticker']
+                set_active_ticker(item['Ticker'])
                 st.rerun()
 
 # ==========================================
-# UI: Main Area (พื้นที่หลัก)
+# UI: Main Area (พื้นที่แสดงผลหลัก)
 # ==========================================
 st.header(f"📈 กราฟ Advanced Chart: {st.session_state.ticker}")
 
-# 1. 🌟 กราฟ TradingView (แก้ปัญหาแบนแต๊ดแต๋ โดยการล็อก Height ทั้ง 3 จุด)
+# 1. กราฟ TradingView
 tradingview_html = f"""
 <div class="tradingview-widget-container" style="height:600px;width:100%">
   <div class="tradingview-widget-container__widget" style="height:100%;width:100%"></div>
@@ -221,23 +224,22 @@ tradingview_html = f"""
   </script>
 </div>
 """
-
-# ใช้ความสูง 650 เผื่อพื้นที่ขอบ
-components.html(tradingview_html, height=650)
+components.html(tradingview_html, height=620)
 
 st.divider()
 
-# 2. 🤖 พื้นที่สำหรับ AI Analysis
+# 2. พื้นที่วิเคราะห์ด้วย AI
 col_ai1, col_ai2 = st.columns([1, 4])
 with col_ai1:
     st.subheader("🤖 AI Analyst")
-    if st.button("✨ กดวิเคราะห์", type="primary", use_container_width=True):
-        st.session_state.analyze_now = True
+    if st.button("✨ กดวิเคราะห์ด้วย AI", type="primary", use_container_width=True):
+        with st.spinner("กำลังให้ AI เจาะลึกข้อมูลกราฟ..."):
+            st.session_state.analysis_result = analyze_with_ai(st.session_state.ticker)
 
 with col_ai2:
-    if st.session_state.get('analyze_now', False):
-        with st.spinner("กำลังให้ AI เจาะลึกข้อมูลกราฟ..."):
-            analysis_result = analyze_with_ai(st.session_state.ticker)
-            st.success("✅ วิเคราะห์เสร็จสิ้น")
-            st.markdown(analysis_result)
-        st.session_state.analyze_now = False # รีเซ็ตสถานะ
+    # แสดงผลลัพธ์จาก Session State (ผลลัพธ์จะคงอยู่ ไม่หายไปไหนจนกว่าจะเปลี่ยนหุ้น)
+    if st.session_state.analysis_result:
+        st.info("💡 บทวิเคราะห์ล่าสุด")
+        st.markdown(st.session_state.analysis_result)
+    else:
+        st.caption("👈 กดปุ่ม 'กดวิเคราะห์ด้วย AI' เพื่อเริ่มการวิเคราะห์หุ้นตัวนี้ด้วยโมเดล Gemini")
