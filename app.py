@@ -41,6 +41,9 @@ if 'ai_analysis' not in st.session_state:
 if 'timeframe' not in st.session_state:
     st.session_state.timeframe = "6M (รายวัน)"
 
+# 🎯 [ปรับปรุง] ย้ายรายชื่อหุ้นสำหรับแถบวิ่งมาตั้งค่าตรงนี้แทนช่องข้อความฝั่งซ้าย เพื่อความสะอาดตา
+TAPE_SYMBOLS = ["NASDAQ:AAPL", "NASDAQ:MSFT", "NASDAQ:NVDA", "NASDAQ:AMZN", "FX:EURUSD", "BITSTAMP:BTCUSD", "CMCMARKETS:GOLD"]
+
 tf_mapping = {
     "1D (1 นาที)": {"period": "1d", "interval": "1m", "tv": "1"},
     "1W (15 นาที)": {"period": "7d", "interval": "15m", "tv": "15"},
@@ -50,15 +53,13 @@ tf_mapping = {
 }
 current_tf = tf_mapping[st.session_state.timeframe]
 
-# --- 🎨 🗜️ การฉีด CSS เข้าไปเพื่อคุมโทนสีแบบลึก (Prop Firm Style เหมือนในภาพ) ---
+# --- 🎨 การฉีด CSS เข้าไปเพื่อคุมโทนสีแบบลึก ---
 st.markdown("""
 <style>
-    /* ตั้งค่าพื้นหลังหลักให้เป็นสีกรมท่าเข้มลึก */
     .stApp {
         background-color: #0b0e14;
         color: #f1f5f9;
     }
-    /* ปรับแต่งสไตล์การ์ดข้อมูล */
     .prop-card {
         background-color: #111622;
         border: 1px solid #1e293b;
@@ -85,6 +86,27 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+# --- 🔄 1. ระบบ GENERATE TICKER TAPE (แถบวิ่งด้านบนสุด) ---
+tape_json_list = [{"proName": sym, "title": sym.split(":")[-1]} for sym in TAPE_SYMBOLS]
+tape_json_string = json.dumps(tape_json_list)
+
+ticker_tape_html = f"""
+<div class="tradingview-widget-container">
+  <div class="tradingview-widget-container__widget"></div>
+  <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-ticker-tape.js" async>
+  {{
+  "symbols": {tape_json_string},
+  "showSymbolLogo": true,
+  "isTransparent": true,
+  "displayMode": "adaptive",
+  "colorTheme": "dark",
+  "locale": "th"
+}}
+  </script>
+</div>
+"""
+components.html(ticker_tape_html, height=50)
 
 # --- 🛠️ ฟังก์ชันดึงข้อมูลดั้งเดิม ---
 def fetch_data_with_header(url):
@@ -156,15 +178,14 @@ def scan_single_stock(ticker):
     return None
 
 # ==========================================
-# 📌 SIDEBAR CONTROLLER (แถบซ้ายดึงข้อมูล)
+# 📌 SIDEBAR CONTROLLER (ลบเมนูกล่อง Ticker Tape ออกเพื่อความสะอาดตา)
 # ==========================================
 with st.sidebar:
     st.markdown("<h2 style='color:#38bdf8; text-align:center;'>📊 PropFirmX AI</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align:center; font-size:0.8rem; color:gray;'>Overview of your trading performance</p>", unsafe_allow_html=True)
     st.divider()
     
-    st.write("🔍 **พิมพ์สัญลักษณ์หุ้นเพื่อวิเคราะห์**")
-    search_ticker = st.text_input("ชื่อย่อหุ้น (Ticker):", value=st.session_state.active_ticker).upper()
+    st.write("🔍 **ค้นหาและเลือกหุ้นเอง**")
+    search_ticker = st.text_input("ชื่อย่อหุ้นหลัก (Ticker):", value=st.session_state.active_ticker).upper()
     if st.button("⚡ ดึงข้อมูลราคากราฟ", use_container_width=True):
         st.session_state.active_ticker = search_ticker
         st.session_state.ai_analysis = None
@@ -195,80 +216,41 @@ with st.sidebar:
             status.update(label=f"✅ สแกนเสร็จสิ้น! พบสตรีมสัญญาณ {len(results)} ตัว", state="complete")
 
 # ==========================================
-# 📌 MAIN WORKSPACE (ถอดแบบจากภาพเลย์เอาต์เป๊ะๆ)
+# 📌 MAIN WORKSPACE
 # ==========================================
 ticker = st.session_state.active_ticker
 
-# ดึงข้อมูลมาคำนวณเบื้องหลัง
 try:
     info = yf.Ticker(ticker).info
     current_price = info.get('currentPrice', 0.0)
     prev_close = info.get('previousClose', 1.0)
     price_change = ((current_price - prev_close) / prev_close) * 100
-    sector = info.get('sector', 'N/A')
-    mcap = f"${info.get('marketCap', 0)/1e9:.2f}B" if info.get('marketCap') else "N/A"
 except:
-    current_price, price_change, sector, mcap = 150.00, 1.25, "Technology", "N/A"
+    current_price, price_change = 150.00, 1.25
 
-# 1️⃣ TOP ROW METRICS GRID (ถอดแบบมาจากแถบด้านบนสุดในภาพ)
-st.markdown("### Account Metrics & Targets")
+# 1️⃣ TOP ROW METRICS GRID (อัปเดตภาษาไทยสไตล์ Prop Firm ตามคำขอ)
+st.markdown("### 📈 สถานะพอร์ตโฟลิโอและเป้าหมายกองทุน")
 m_col1, m_col2, m_col3, m_col4, m_col5, m_col6 = st.columns(6)
 
 with m_col1:
     delta_color = "#22c55e" if price_change >= 0 else "#ef4444"
-    st.markdown(f"""
-    <div class="prop-card">
-        <div class="prop-card-title">Account Balance</div>
-        <div class="prop-card-value">${current_price*150:,.2f}</div>
-        <div class="prop-card-delta" style="color:{delta_color};">+{price_change:.2f}% (Today)</div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(f"""<div class="prop-card"><div class="prop-card-title">💰 เงินทุนในพอร์ต</div><div class="prop-card-value">${current_price*150:,.2f}</div><div class="prop-card-delta" style="color:{delta_color};">+{price_change:.2f}% (วันนี้)</div></div>""", unsafe_allow_html=True)
 with m_col2:
-    st.markdown(f"""
-    <div class="prop-card">
-        <div class="prop-card-title">Equity</div>
-        <div class="prop-card-value">${current_price*152:,.2f}</div>
-        <div class="prop-card-delta" style="color:#22c55e;">Floating Gain</div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(f"""<div class="prop-card"><div class="prop-card-title">📈 มูลค่าสินทรัพย์รวม (Equity)</div><div class="prop-card-value">${current_price*152:,.2f}</div><div class="prop-card-delta" style="color:#22c55e;">Floating Gain</div></div>""", unsafe_allow_html=True)
 with m_col3:
-    st.markdown(f"""
-    <div class="prop-card">
-        <div class="prop-card-title">Profit / Loss</div>
-        <div class="prop-card-value" style="color:#22c55e;">+${current_price*2.5:,.2f}</div>
-        <div class="prop-card-delta" style="color:#22c55e;">🟢 Target Path</div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown(f"""<div class="prop-card"><div class="prop-card-title">📊 กำไรสุทธิสะสม</div><div class="prop-card-value" style="color:#22c55e;">+${current_price*2.5:,.2f}</div><div class="prop-card-delta" style="color:#22c55e;">🟢 สัญญาณบวก</div></div>""", unsafe_allow_html=True)
 with m_col4:
-    st.markdown("""
-    <div class="prop-card">
-        <div class="prop-card-title">Profit Target</div>
-        <div class="prop-card-value">$3,000.00</div>
-        <div class="prop-card-delta" style="color:gray;">80.35% Complete</div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown("""<div class="prop-card"><div class="prop-card-title">🎯 เป้าหมายกำไรเฟสนี้</div><div class="prop-card-value">$3,000.00</div><div class="prop-card-delta" style="color:gray;">สำเร็จแล้ว 80.35%</div></div>""", unsafe_allow_html=True)
 with m_col5:
-    st.markdown("""
-    <div class="prop-card">
-        <div class="prop-card-title">Max Daily Loss</div>
-        <div class="prop-card-value" style="color:#ef4444;">$2,500.00</div>
-        <div class="prop-card-delta" style="color:gray;">Used: $420.35</div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown("""<div class="prop-card"><div class="prop-card-title">⚠️ ขีดจำกัดขาดทุนรายวัน</div><div class="prop-card-value" style="color:#ef4444;">$2,500.00</div><div class="prop-card-delta" style="color:gray;">ใช้ไปแล้ว: $420.35</div></div>""", unsafe_allow_html=True)
 with m_col6:
-    st.markdown("""
-    <div class="prop-card">
-        <div class="prop-card-title">Drawdown Limit</div>
-        <div class="prop-card-value">$1,250.00</div>
-        <div class="prop-card-delta" style="color:gray;">Safe Zone</div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown("""<div class="prop-card"><div class="prop-card-title">🛑 ขีดจำกัดขาดทุนสูงสุด (Max DD)</div><div class="prop-card-value">$1,250.00</div><div class="prop-card-delta" style="color:gray;">โซนปลอดภัย</div></div>""", unsafe_allow_html=True)
 
-# 2️⃣ MIDDLE SECTION: กราฟฝั่งซ้าย + แดชบอร์ด Rules ฝั่งขวา (แบ่งสัดส่วน 3:1 ตามภาพ)
+# 2️⃣ MIDDLE SECTION: กราฟหลัก
 col_left_main, col_right_panel = st.columns([3, 1])
 
 with col_left_main:
-    st.markdown(f"#### 📈 Live Market Technical Chart: {ticker} ({st.session_state.timeframe})")
+    st.markdown(f"#### 📈 Live Market Technical Chart: <span style='color:#38bdf8;'>{ticker}</span> ({st.session_state.timeframe})", unsafe_allow_html=True)
     tradingview_html = f"""
     <div class="tradingview-widget-container" style="height:400px;width:100%">
       <div id="tradingview_chart" style="height:100%;width:100%"></div>
@@ -293,66 +275,64 @@ with col_left_main:
     components.html(tradingview_html, height=410)
 
 with col_right_panel:
-    st.markdown("#### 🛡️ Account Status & Rules")
+    # 🎯 [ปรับปรุง] เปลี่ยนหัวข้อและการรายงานผลตรงฝั่งขวาเป็นภาษาไทยเรียบร้อย
+    st.markdown("#### 🛡️ สถานะและกฎเหล็กกองทุน")
     with st.container(border=True):
-        st.write("🔴 **Challenge Type:** `2-Step Challenge`")
-        st.write("📆 **Days Remaining:** `18 Days`")
+        st.write("🔴 **ประเภทการทดสอบ:** `ประเมินแบบ 2 ขั้นตอน`")
+        st.write("📆 **เวลาที่เหลือคุมพอร์ต:** `18 วัน`")
         st.divider()
-        st.write("📊 **Rules Progress**")
-        
-        st.caption("Profit Target (80.35%)")
-        st.progress(0.80)
-        
-        st.caption("Max Daily Loss (16.81%)")
-        st.progress(0.16)
-        
-        st.caption("Max Overall Loss (25.61%)")
-        st.progress(0.25)
-        
-        st.caption("Consistency Rule (92%)")
-        st.progress(0.92)
+        st.write("📊 **ความคืบหน้าตามกฎกองทุน**")
+        st.caption("เป้าหมายกำไรสะสม (80.35%)"); st.progress(0.80)
+        st.caption("ความเสี่ยงขาดทุนรายวัน (16.81%)"); st.progress(0.16)
+        st.caption("เพดานดาวน์ดาวน์รวม (25.61%)"); st.progress(0.25)
+        st.caption("กฎความสม่ำเสมอในการเทรด (92%)"); st.progress(0.92)
 
 st.divider()
 
-# 3️⃣ BOTTOM SECTION: ตารางเทรดล่าสุด + วงแหวนประมวลผลระบบ AI + ปฏิทินเศรษฐกิจ
+# 3️⃣ BOTTOM SECTION: ตารางส่งสัญญาณแบบ Interactive
 col_b1, col_b2, col_b3 = st.columns([1.4, 0.9, 0.9])
 
 with col_b1:
-    st.markdown("#### 📋 Recent Market Signals / Scanned Tickers")
+    st.markdown("#### 📋 ตารางสัญญาณหุ้น (คลิกเลือกแถวเพื่อเปลี่ยนกราฟด้านบนทันที)")
+    
     if st.session_state.scan_results:
-        df_scan = pd.DataFrame(st.session_state.scan_results, columns=["Ticker", "Price", "Signal"])
-        st.dataframe(df_scan, use_container_width=True, hide_index=True, height=220)
+        df_display = pd.DataFrame(st.session_state.scan_results, columns=["Ticker", "Price", "Signal"])
     else:
-        # แสดง Mock ข้อมูลเสมือนจริงแบบในภาพถ้าไม่มีการกดสแกน
-        mock_trades = pd.DataFrame([
-            {"Symbol": "EURUSD", "Direction": "BUY", "Size": "1.00", "Price": "$1.0852", "P/L (USD)": "+$405.00"},
-            {"Symbol": "XAUUSD", "Direction": "SELL", "Size": "0.50", "Price": "$2,353.45", "P/L (USD)": "+$266.50"},
-            {"Symbol": "GBPUSD", "Direction": "BUY", "Size": "1.00", "Price": "$1.2745", "P/L (USD)": "+$333.00"},
-            {"Symbol": "AAPL", "Direction": "BUY", "Size": "20.00", "Price": f"${current_price}", "P/L (USD)": "Pending"}
+        df_display = pd.DataFrame([
+            {"Ticker": "AAPL", "Price": 180.25, "Signal": "🟢 BUY (BB Breakout)"},
+            {"Ticker": "NVDA", "Price": 450.10, "Signal": "🔥 RSI Overbought"},
+            {"Ticker": "TSLA", "Price": 175.50, "Signal": "📉 RSI Oversold"},
+            {"Ticker": "MSFT", "Price": 420.35, "Signal": "⚔️ MACD Golden Cross"},
+            {"Ticker": "AMD", "Price": 160.80, "Signal": "🟢 BUY (BB Breakout)"}
         ])
-        st.dataframe(mock_trades, use_container_width=True, hide_index=True, height=220)
+    
+    # 🌟 [จุดแก้ไขตัวเออร์เรอร์] เปลี่ยนจาก "single" เป็น "single-row" เพื่อรองรับไลบรารีปัจจุบันเรียบร้อยครับ
+    selected_rows = st.dataframe(
+        df_display, 
+        use_container_width=True, 
+        hide_index=True, 
+        height=240,
+        on_select="rerun",  
+        selection_mode="single-row" 
+    )
+    
+    if selected_rows and selected_rows.get("selection", {}).get("rows"):
+        clicked_idx = selected_rows["selection"]["rows"][0]
+        chosen_ticker = df_display.iloc[clicked_idx]["Ticker"]
+        
+        if chosen_ticker != st.session_state.active_ticker:
+            st.session_state.active_ticker = chosen_ticker
+            st.session_state.ai_analysis = None 
+            st.rerun()
 
 with col_b2:
     st.markdown("#### 🎯 Performance Summary")
     with st.container(border=True):
-        # สร้างวงแหวน Win Rate เลียนแบบในรูปด้วย HTML / CSS Base
-        st.markdown("""
-        <div style="text-align: center; padding: 10px;">
-            <div style="display: inline-block; width: 100px; height: 100px; border-radius: 50%; background: conic-gradient(#22c55e 73%, #ef4444 0); padding: 10px;">
-                <div style="width: 80px; height: 80px; border-radius: 50%; background-color: #111622; margin: 0 auto; line-height: 80px; font-weight: bold; font-size: 1.3rem;">73%</div>
-            </div>
-            <p style="margin-top: 5px; font-size: 0.9rem; color: #94a3b8;">Win Rate Metrics</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # รายละเอียดสถิติประกอบด้านล่างวงแหวน
-        st.text("Total Trades: 142")
-        st.text("Winning Trades: 104")
-        st.text("Losing Trades: 38")
+        st.markdown("""<div style="text-align: center; padding: 10px;"><div style="display: inline-block; width: 100px; height: 100px; border-radius: 50%; background: conic-gradient(#22c55e 73%, #ef4444 0); padding: 10px;"><div style="width: 80px; height: 80px; border-radius: 50%; background-color: #111622; margin: 0 auto; line-height: 80px; font-weight: bold; font-size: 1.3rem;">73%</div></div><p style="margin-top: 5px; font-size: 0.9rem; color: #94a3b8;">Win Rate Metrics</p></div>""", unsafe_allow_html=True)
+        st.text("Total Trades: 142"); st.text("Winning Trades: 104"); st.text("Losing Trades: 38")
 
 with col_b3:
     st.markdown("#### 🔮 Deep AI Analyst Insights")
-    # ดึงค่าเทคนิคอลดิบมาเตรียมส่งให้ AI
     try:
         raw_df = yf.download(ticker, period="1mo", interval="1d", auto_adjust=False, progress=False)
         df_latest = clean_df_columns(raw_df, ticker).dropna()
@@ -378,7 +358,6 @@ with col_b3:
                             response_mime_type="application/json",
                             response_schema=StockAnalysisResult,
                             temperature=0.2,
-                            # จุดที่ 1: ปรับแต่งข้อความคุมพฤติกรรม AI ให้บังคับตอบทุกช่องเป็นภาษาไทยย่อสั้นๆ
                             system_instruction="คุณคือนักบริหารความเสี่ยงมืออาชีพของกองทุนระดับโลก ต้องวิเคราะห์และตอบกลับทุกฟิลด์เป็นภาษาไทยที่กระชับ คมคาย 100% ห้ามใช้ภาษาอังกฤษปนในผลลัพธ์เด็ดขาด เช่น ให้ใช้คำว่า ขาขึ้น, ขาลง, ไซด์เวย์, เสี่ยงสูง, เสี่ยงปานกลาง, ถือ/รอ ดูแนวโน้ม"
                         )
                     )
@@ -386,21 +365,11 @@ with col_b3:
                 except Exception as e:
                     st.error(f"Error: {e}")
 
-    # --- ส่วนแสดงผลบทวิเคราะห์ (ปรับเปลี่ยนหัวข้อภาษาไทยตามภาพ image_d969a9.png) ---
     if st.session_state.ai_analysis:
         res = st.session_state.ai_analysis
-        
-        # จุดที่ 2: เปลี่ยนชื่อหัวข้อแสดงผลเป็นภาษาไทย
         st.markdown(f"**มุมมองเทรนด์:** `{res['sentiment']}`")
         st.markdown(f"**ระดับความเสี่ยง:** `{res['risk_level']}` | **คำแนะนำ:** `{res['action_suggestion']}`")
         st.markdown(f"🛡  **แนวรับ:** `{res['support_zone']}` | 🚀 **แนวต้าน:** `{res['resistance_zone']}`")
-        
-        # กล่องแสดงผลเหตุผลเชิงลึก
-        st.markdown(f"""
-        <div style="background-color: #161b26; border-left: 4px solid #38bdf8; padding: 12px; border-radius: 6px; margin-top: 12px; font-size: 0.9rem; color: #cbd5e1; line-height: 1.5;">
-            <strong style="color: #38bdf8;">📝 ความเห็นและบทวิเคราะห์เชิงลึก:</strong><br>
-            <div style="margin-top: 6px;">{res['detailed_reason']}</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f"""<div style="background-color: #161b26; border-left: 4px solid #38bdf8; padding: 12px; border-radius: 6px; margin-top: 12px; font-size: 0.9rem; color: #cbd5e1; line-height: 1.5;"><strong style="color: #38bdf8;">📝 ความเห็นและบทวิเคราะห์เชิงลึก:</strong><br><div style="margin-top: 6px;">{res['detailed_reason']}</div></div>""", unsafe_allow_html=True)
     else:
         st.info("💡 คลิกปุ่มด้านบนเพื่อให้ AI เจาะลึกโครงสร้างราคาแบบ Prop Firm Strategy")
